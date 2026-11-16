@@ -3,7 +3,7 @@ on:
     workflow_dispatch:
         inputs:
             remove_not_in_manifest:
-                description: 'Remove images not found in manifest (if false, will be moved to separate dir instead).'
+                description: "Remove images not found in manifest (if false, will be moved to separate dir instead)."
                 required: true
                 default: false
                 type: boolean
@@ -21,11 +21,11 @@ jobs:
     reprocess-all-images:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v6
+            - uses: actions/checkout@v7
 
-            - uses: pnpm/action-setup@v5
+            - uses: pnpm/action-setup@v6
 
-            - uses: actions/setup-node@v6
+            - uses: actions/setup-node@v7
               with:
                   node-version: 24
                   registry-url: https://registry.npmjs.org/

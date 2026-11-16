@@ -3,7 +3,7 @@ on:
     pull_request:
         types: [opened, synchronize, reopened, edited]
         branches: [master]
-        paths: ['images/**']
+        paths: ["images/**"]
 
 jobs:
     check-ota-pr:
@@ -12,11 +12,11 @@ jobs:
         if: |
             !contains(github.event.pull_request.labels.*.name, 'ignore-ota-workflow')
         steps:
-            - uses: actions/checkout@v6
+            - uses: actions/checkout@v7
 
-            - uses: pnpm/action-setup@v5
+            - uses: pnpm/action-setup@v6
 
-            - uses: actions/setup-node@v6
+            - uses: actions/setup-node@v7
               with:
                   node-version: 24
                   registry-url: https://registry.npmjs.org/

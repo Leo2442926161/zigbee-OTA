@@ -1,21 +1,21 @@
 name: Run auto download
 on:
     schedule:
-        - cron: '0 0 * * 0'
+        - cron: "0 0 * * 0"
     workflow_dispatch:
         inputs:
             prev:
-                description: 'Get previous firmware versions (if available) instead of latest.'
+                description: "Get previous firmware versions (if available) instead of latest."
                 required: false
                 default: false
                 type: boolean
             manufacturers:
-                description: 'Only trigger updates for given manufacturers (CSV, no space).'
+                description: "Only trigger updates for given manufacturers (CSV, no space)."
                 required: false
-                default: ''
+                default: ""
                 type: string
             ignore_cache:
-                description: 'Ignore cached data in .cache for this run.'
+                description: "Ignore cached data in .cache for this run."
                 required: false
                 default: false
                 type: boolean
@@ -27,11 +27,11 @@ jobs:
     run-autodl:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v6
+            - uses: actions/checkout@v7
 
-            - uses: pnpm/action-setup@v5
+            - uses: pnpm/action-setup@v6
 
-            - uses: actions/setup-node@v6
+            - uses: actions/setup-node@v7
               with:
                   node-version: 24
                   registry-url: https://registry.npmjs.org/

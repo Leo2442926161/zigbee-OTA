@@ -2,7 +2,7 @@ name: Concatenate CA certificates
 on:
     push:
         branches: [master]
-        paths: ['cacerts/**']
+        paths: ["cacerts/**"]
     workflow_dispatch:
 
 permissions:
@@ -12,11 +12,11 @@ jobs:
     concat-cacerts:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v6
+            - uses: actions/checkout@v7
 
-            - uses: pnpm/action-setup@v5
+            - uses: pnpm/action-setup@v6
 
-            - uses: actions/setup-node@v6
+            - uses: actions/setup-node@v7
               with:
                   node-version: 24
                   registry-url: https://registry.npmjs.org/

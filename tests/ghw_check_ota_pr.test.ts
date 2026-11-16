@@ -1,4 +1,4 @@
-import {existsSync, readFileSync, rmSync, writeFileSync} from "node:fs";
+import {copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import path from "node:path";
 import type * as CoreApi from "@actions/core";
 import type {Octokit} from "@octokit/rest";
@@ -9,6 +9,7 @@ import type {Context, RepoImageMeta} from "../src/types.js";
 import {
     BASE_IMAGES_TEST_DIR_PATH,
     getAdjustedContent,
+    getImageOriginalDirPath,
     IMAGE_GLEDOPTO,
     IMAGE_INVALID,
     IMAGE_LUMI,
@@ -490,6 +491,31 @@ Text after end tag`);
         expect(baseManifest).toStrictEqual([IMAGE_V14_2_MANUF_METAS]);
     });
 
+    it("success with SHA-matching image present when modelId differs", async () => {
+        filePaths = [useImage(IMAGE_V14_2_COPY), useImage(IMAGE_V14_2)];
+        const newContext = withBody(
+            `\`\`\`json [{"fileName": "${IMAGE_V14_2_COPY}", "modelId": "model_a"}, {"fileName": "${IMAGE_V14_2}", "modelId": "model_b"}] \`\`\``,
+        );
+
+        // @ts-expect-error mock
+        await checkOtaPR(github, core, newContext);
+
+        expect(readManifestSpy).toHaveBeenCalledWith(common.BASE_INDEX_MANIFEST_FILENAME);
+        expect(readManifestSpy).toHaveBeenCalledWith(common.PREV_INDEX_MANIFEST_FILENAME);
+        expect(addImageToBaseSpy).toHaveBeenCalledTimes(2);
+        expect(addImageToPrevSpy).toHaveBeenCalledTimes(0);
+        expect(writeManifestSpy).toHaveBeenCalledTimes(2);
+        expect(writeManifestSpy).toHaveBeenCalledWith(common.BASE_INDEX_MANIFEST_FILENAME, [
+            {
+                ...IMAGE_V14_2_METAS,
+                fileName: IMAGE_V14_2_COPY,
+                modelId: "model_a",
+                url: IMAGE_V14_2_METAS.url.replace(IMAGE_V14_2, IMAGE_V14_2_COPY),
+            },
+            withExtraMetas(IMAGE_V14_2_METAS, {modelId: "model_b"}),
+        ]);
+    });
+
     it("failure with spec-matching image present", async () => {
         filePaths = [useImage(IMAGE_V14_2_COPY), useImage(IMAGE_V14_2)];
         // bypass initial "conflict" match by using random `minFileVersion`
@@ -517,6 +543,69 @@ Text after end tag`);
         expect(addImageToPrevSpy).toHaveBeenCalledTimes(0);
         expect(writeManifestSpy).toHaveBeenCalledTimes(0);
         expect(baseManifest).toStrictEqual([metaCopy]);
+    });
+
+    // Aqara devices share same imageType and manufacturerCode, but have different modelIds, so they can have multiple
+    // images (with same imageType/manufacturerCode) in the base manifest.
+    // Images with same imageType and manufacturerCode are only allowed when both images have different modelIds.
+    // https://github.com/Koenkk/zigbee-OTA/pull/1214
+    it.each([
+        {
+            name: "different modelIds",
+            modelIdCopy: "model_a",
+            modelIdOriginal: "model_b",
+            shouldSucceed: true,
+        },
+        {
+            name: "matching modelIds",
+            modelIdCopy: "model_a",
+            modelIdOriginal: "model_a",
+            shouldSucceed: false,
+        },
+        {
+            name: "only copy has modelId",
+            modelIdCopy: "model_a",
+            modelIdOriginal: undefined,
+            shouldSucceed: true,
+        },
+        {
+            name: "only original has modelId",
+            modelIdCopy: undefined,
+            modelIdOriginal: "model_a",
+            shouldSucceed: true,
+        },
+    ])("modelId spec-matching with $name", async ({modelIdCopy, modelIdOriginal, shouldSucceed}) => {
+        filePaths = [useImage(IMAGE_V14_2_COPY), useImage(IMAGE_V14_2)];
+
+        // Build JSON body with modelId only if defined
+        const metasArray = [];
+        if (modelIdCopy !== undefined) {
+            metasArray.push({fileName: IMAGE_V14_2_COPY, modelId: modelIdCopy});
+        } else {
+            metasArray.push({fileName: IMAGE_V14_2_COPY});
+        }
+        if (modelIdOriginal !== undefined) {
+            metasArray.push({fileName: IMAGE_V14_2, modelId: modelIdOriginal});
+        } else {
+            metasArray.push({fileName: IMAGE_V14_2});
+        }
+
+        const newContext = withBody(`\`\`\`json ${JSON.stringify(metasArray)} \`\`\``);
+
+        // manip SHA512 so it doesn't match on that point in `hasManufacturerImage`
+        const f = readFileSync(filePaths[0].filename);
+        f[f.byteLength - 1] = 0xff;
+        writeFileSync(filePaths[0].filename, f);
+
+        if (shouldSucceed) {
+            // @ts-expect-error mock
+            await checkOtaPR(github, core, newContext);
+        } else {
+            await expect(async () => {
+                // @ts-expect-error mock
+                await checkOtaPR(github, core, newContext);
+            }).rejects.toThrow(/Conflict with image at index|Image already present for manufacturer/);
+        }
     });
 
     it("success with newer than current but minFileVersion keeps both", async () => {
@@ -709,5 +798,118 @@ Text after end tag`);
                 await checkOtaPR(github, core, newContext);
             }).rejects.toThrow(expect.objectContaining({message: expect.stringContaining(error)}));
         }
+    });
+
+    it("failure archiving base image over different prev image with same file name", async () => {
+        // base v13 and prev v12 share the same file name, prev v12 is restricted so it does not match base v13
+        const prevSameName = withExtraMetas(IMAGE_V12_1_METAS, {
+            // @ts-expect-error override
+            fileName: IMAGE_V13_1,
+            url: `${common.BASE_REPO_URL}${common.REPO_BRANCH}/${common.PREV_IMAGES_DIR}/${IMAGES_TEST_DIR}/${IMAGE_V13_1}`,
+            maxFileVersion: 11,
+        });
+        setManifest(common.BASE_INDEX_MANIFEST_FILENAME, [structuredClone(IMAGE_V13_1_METAS_MAIN)]);
+        setManifest(common.PREV_INDEX_MANIFEST_FILENAME, [structuredClone(prevSameName)]);
+        useImage(IMAGE_V13_1);
+        mkdirSync(PREV_IMAGES_TEST_DIR_PATH, {recursive: true});
+        copyFileSync(getImageOriginalDirPath(IMAGE_V12_1), path.join(PREV_IMAGES_TEST_DIR_PATH, IMAGE_V13_1));
+        // PR adds v14, which archives base v13 to prev under the file name of prev v12
+        filePaths = [useImage(IMAGE_V14_1)];
+
+        await expect(async () => {
+            // @ts-expect-error mock
+            await checkOtaPR(github, core, context);
+        }).rejects.toThrow(
+            expect.objectContaining({
+                message: expect.stringContaining(`Prev manifest already has a different image with file name '${IMAGE_V13_1}'`),
+            }),
+        );
+
+        expect(writeManifestSpy).toHaveBeenCalledTimes(0);
+        // prev v12 binary must not have been overwritten by base v13
+        expect(common.computeSHA512(readFileSync(path.join(PREV_IMAGES_TEST_DIR_PATH, IMAGE_V13_1)))).toStrictEqual(IMAGE_V12_1_METAS.sha512);
+    });
+
+    it("failure archiving base image over prev image with same file name leaves files untouched", async () => {
+        // prev has a matching v12 entry (to be removed) and a conflicting restricted entry under the same file name (corrupt state)
+        const prevUrl = `${common.BASE_REPO_URL}${common.REPO_BRANCH}/${common.PREV_IMAGES_DIR}/${IMAGES_TEST_DIR}/${IMAGE_V13_1}`;
+        // @ts-expect-error override
+        const prevMatching = withExtraMetas(IMAGE_V12_1_METAS, {fileName: IMAGE_V13_1, url: prevUrl});
+        // @ts-expect-error override
+        const prevConflicting = withExtraMetas(IMAGE_V12_1_METAS, {fileName: IMAGE_V13_1, url: prevUrl, sha512: "other", maxFileVersion: 11});
+        setManifest(common.BASE_INDEX_MANIFEST_FILENAME, [structuredClone(IMAGE_V13_1_METAS_MAIN)]);
+        setManifest(common.PREV_INDEX_MANIFEST_FILENAME, [prevMatching, prevConflicting]);
+        useImage(IMAGE_V13_1);
+        mkdirSync(PREV_IMAGES_TEST_DIR_PATH, {recursive: true});
+        copyFileSync(getImageOriginalDirPath(IMAGE_V12_1), path.join(PREV_IMAGES_TEST_DIR_PATH, IMAGE_V13_1));
+        filePaths = [useImage(IMAGE_V14_1)];
+
+        await expect(async () => {
+            // @ts-expect-error mock
+            await checkOtaPR(github, core, context);
+        }).rejects.toThrow(
+            expect.objectContaining({
+                message: expect.stringContaining(`Prev manifest already has a different image with file name '${IMAGE_V13_1}'`),
+            }),
+        );
+
+        expect(writeManifestSpy).toHaveBeenCalledTimes(0);
+        expect(existsSync(path.join(PREV_IMAGES_TEST_DIR_PATH, IMAGE_V13_1))).toStrictEqual(true);
+        expect(existsSync(path.join(BASE_IMAGES_TEST_DIR_PATH, IMAGE_V13_1))).toStrictEqual(true);
+    });
+
+    it("success archiving base image when prev has the same binary under the same file name for another modelId", async () => {
+        // same file declared for two models in base, model_a already upgraded (its v13 entry archived to prev, same binary)
+        const baseA = withExtraMetas(IMAGE_V13_1_METAS_MAIN, {modelId: "model_a"});
+        const baseB = withExtraMetas(IMAGE_V13_1_METAS_MAIN, {modelId: "model_b"});
+        const prevA = withExtraMetas(IMAGE_V13_1_METAS, {modelId: "model_a"});
+        setManifest(common.BASE_INDEX_MANIFEST_FILENAME, [baseA, baseB]);
+        setManifest(common.PREV_INDEX_MANIFEST_FILENAME, [prevA]);
+        useImage(IMAGE_V13_1);
+        useImage(IMAGE_V13_1, PREV_IMAGES_TEST_DIR_PATH);
+        filePaths = [useImage(IMAGE_V14_1)];
+        const newContext = withBody(`\`\`\`json [{"fileName": "${IMAGE_V14_1}", "modelId": "model_b"}] \`\`\``);
+
+        // @ts-expect-error mock
+        await checkOtaPR(github, core, newContext);
+
+        expect(writeManifestSpy).toHaveBeenCalledWith(common.BASE_INDEX_MANIFEST_FILENAME, [
+            baseA,
+            withExtraMetas(IMAGE_V14_1_METAS, {modelId: "model_b"}),
+        ]);
+        expect(writeManifestSpy).toHaveBeenCalledWith(common.PREV_INDEX_MANIFEST_FILENAME, [
+            prevA,
+            withExtraMetas(IMAGE_V13_1_METAS, {modelId: "model_b"}),
+        ]);
+    });
+    it.each([["modified"], ["renamed"], ["removed"]])("failure with existing image %s in PR", async (status) => {
+        setManifest(common.BASE_INDEX_MANIFEST_FILENAME, [structuredClone(IMAGE_V13_1_METAS_MAIN)]);
+        filePaths = [
+            useImage(IMAGE_V14_1),
+            {...useImage(IMAGE_V13_1), status, previous_filename: `${BASE_IMAGES_TEST_DIR_PATH}/renamed-${IMAGE_V13_1}`},
+        ];
+
+        await expect(async () => {
+            // @ts-expect-error mock
+            await checkOtaPR(github, core, context);
+        }).rejects.toThrow(
+            expect.objectContaining({
+                message: expect.stringContaining(
+                    `Detected modified/renamed/deleted existing images: ${BASE_IMAGES_TEST_DIR_PATH}/${IMAGE_V13_1} (${status})`,
+                ),
+            }),
+        );
+
+        expectNoChanges(false);
+    });
+
+    it("success with image renamed from outside images directory in PR", async () => {
+        filePaths = [{...useImage(IMAGE_V14_1), status: "renamed", previous_filename: `retracted-images/${IMAGE_V14_1}`}];
+
+        // @ts-expect-error mock
+        await checkOtaPR(github, core, context);
+
+        expect(addImageToBaseSpy).toHaveBeenCalledTimes(1);
+        expect(writeManifestSpy).toHaveBeenCalledWith(common.BASE_INDEX_MANIFEST_FILENAME, [IMAGE_V14_1_METAS]);
     });
 });
